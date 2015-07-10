@@ -1,84 +1,80 @@
 #!/usr/bin/env python3
 # coding: utf-8
 
-# In[1]:
+
+## Initial imports
 
 import pymongo
 import time
 import rethinkdb as r
-import sjbsettings
 import inspect
 import datetime
 from pymongo import MongoClient
-client = MongoClient(host=sjbsettings.sjb['MHOST'])
-DBNAME = 'demomodel'
-db = client[DBNAME]
+
+## Import private settings (this does not get checked into git)
+import sjbsettings
+
+## Useful static global variables # TODO move DBNAME to sjbsettings
+DBNAME      = 'demomodel'
 REMOVE_COLS = set(['_properties', 'system.indexes'])
 
+## Connect to Mongo
+client = MongoClient(host=sjbsettings.sjb['MHOST'])
+db     = client[DBNAME]
 
-# In[2]:
-
+## Connect to RethinkDB # TODO Make Rethink and Mongo hosts in different variables
 rt_conn = r.connect(db = 'demomodel', host=sjbsettings.sjb['MHOST']).repl()
 
 
-# In[3]:
 
-db.collection_names()
-
-
-# In[4]:
-
+################################################################################
+## For a Mongo database, get the collections in this database
+## and subtract REMOVE_COLS. The result of calling this function
+## are the columns that you will mirror to RethinkDB
 def getMongoCollections(db):
     colset = set(db.collection_names())
     return(set.difference(colset, REMOVE_COLS))
 
-
-# In[5]:
-
-
+## For a Mongo document, transform it to an object that can be serialized into
+## JSON for insertion into RethinkDB. If there are ever serialization issues,
+## the fix gets implemented here.
 def transform_mongo_doc_to_rethink_doc(mdoc):
     for k,v in mdoc.items():
         ## fix subdocuments
         if(type(v) == dict):
             mdoc[k] = transform_mongo_doc_to_rethink_doc(v)
         
-        ## fix timezone
+        ## fix timezone, set to UTC
+        ## RethinkDB will not accept dates without a timezone.
+        ## # TODO fix to check for an existing timezone before overwriting with UTC
         if(type(v) == datetime.datetime):
             mdoc[k] = v.replace(tzinfo=r.make_timezone('0:00'))
     
-        ## fix object id
+        ## Fix object id
         if k == "_id":
             mdoc[k] = str(v)
 
+        ## Fix etag
         if k == "_etag":
             mdoc[k] = str(v)
 
     return(mdoc)
+################################################################################
 
-
-# In[6]:
-
-getMongoCollections(db)
-
-
-# In[7]:
-
-rt_collections = r.db(DBNAME).table_list().run(rt_conn)
-
+## Check for any tables that are in Mongo and not RethinkDB, and create.
+rt_collections              = r.db(DBNAME).table_list().run(rt_conn)
 collections_in_mongo_not_rt = set.difference(getMongoCollections(db), set(rt_collections))
-collections_in_mongo_not_rt
 
 for missing_collection in collections_in_mongo_not_rt:
     print("Creating " + missing_collection + " which was missing in rethink")
     r.db(DBNAME).table_create(missing_collection).run(rt_conn)
 
 
-# In[9]:
 
-## the main loop
-
+## The main loop
 cols = list(getMongoCollections(db))
-##cols = ["rawdata_sensor"]
+
+## # TODO, make rethink_mirrored a settable column name
 query = { "$or" :  [ {"rethink_mirrored" : {"$exists" : False}}, { "rethink_mirrored" : False}]}
 
 
