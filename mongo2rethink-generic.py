@@ -9,6 +9,7 @@ import rethinkdb as r
 import sjbsettings
 import inspect
 import datetime
+import bson
 from pymongo import MongoClient
 client = MongoClient(host=sjbsettings.sjb['MHOST'])
 DBNAME = 'demomodel'
@@ -38,6 +39,9 @@ def getMongoCollections(db):
 
 def transform_mongo_doc_to_rethink_doc(mdoc):
     for k,v in mdoc.items():
+
+        print("k: " + str(k) + " type: " + str(type(v)))
+
         ## fix subdocuments
         if(type(v) == dict):
             mdoc[k] = transform_mongo_doc_to_rethink_doc(v)
@@ -45,14 +49,22 @@ def transform_mongo_doc_to_rethink_doc(mdoc):
         ## fix timezone
         if(type(v) == datetime.datetime):
             mdoc[k] = v.replace(tzinfo=r.make_timezone('0:00'))
-    
-        ## fix object id
-        if k == "_id":
+
+        if(type(v) == bson.objectid.ObjectId):
             mdoc[k] = str(v)
 
-        if k == "_etag":
-            mdoc[k] = str(v)
+        if(type(v) == list):
+            mdoc[k] = [str(x) for x in v]
 
+        # ## fix object id
+        # if k == "_id":
+        #     mdoc[k] = str(v)
+
+        # if k == "_etag":
+        #     mdoc[k] = str(v)
+
+
+            
     return(mdoc)
 
 
@@ -93,6 +105,8 @@ while 1:
             print("--------------------------------------------------------------------------------")
             print(collection + "\t\t" + str(N_docs) + " unmirrored docs")
             for doc in cur_col.find(query):
+                print("DOC:")
+                print(str(doc))
                 rt_doc = transform_mongo_doc_to_rethink_doc(doc)
                 rt_doc['rethink_mirrored'] = True ## this becomes true on the next line
                 print(str(rt_doc))
