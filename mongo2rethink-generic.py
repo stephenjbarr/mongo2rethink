@@ -7,20 +7,16 @@
 import pymongo
 import time
 import rethinkdb as r
+import sjbsettings
 import inspect
 import datetime
+import bson
 from pymongo import MongoClient
-
-## Import private settings (this does not get checked into git)
-import sjbsettings
-
-## Useful static global variables # TODO move DBNAME to sjbsettings
-DBNAME      = 'demomodel'
+client = MongoClient(host=sjbsettings.sjb['MHOST'])
+DBNAME = 'demomodel'
+db = client[DBNAME]
 REMOVE_COLS = set(['_properties', 'system.indexes'])
 
-## Connect to Mongo
-client = MongoClient(host=sjbsettings.sjb['MHOST'])
-db     = client[DBNAME]
 
 ## Connect to RethinkDB # TODO Make Rethink and Mongo hosts in different variables
 rt_conn = r.connect(db = 'demomodel', host=sjbsettings.sjb['MHOST']).repl()
@@ -40,6 +36,9 @@ def getMongoCollections(db):
 ## the fix gets implemented here.
 def transform_mongo_doc_to_rethink_doc(mdoc):
     for k,v in mdoc.items():
+
+        print("k: " + str(k) + " type: " + str(type(v)))
+
         ## fix subdocuments
         if(type(v) == dict):
             mdoc[k] = transform_mongo_doc_to_rethink_doc(v)
@@ -50,19 +49,32 @@ def transform_mongo_doc_to_rethink_doc(mdoc):
         if(type(v) == datetime.datetime):
             mdoc[k] = v.replace(tzinfo=r.make_timezone('0:00'))
     
-        ## Fix object id
+        ## fix object id
         if k == "_id":
             mdoc[k] = str(v)
 
-        ## Fix etag
-        if k == "_etag":
+        if(type(v) == bson.objectid.ObjectId):
             mdoc[k] = str(v)
 
+        if(type(v) == list):
+            mdoc[k] = [str(x) for x in v]
+
+        # ## fix object id
+        # if k == "_id":
+        #     mdoc[k] = str(v)
+
+        # if k == "_etag":
+        #     mdoc[k] = str(v)
+
+
+            
     return(mdoc)
 ################################################################################
 
-## Check for any tables that are in Mongo and not RethinkDB, and create.
-rt_collections              = r.db(DBNAME).table_list().run(rt_conn)
+
+
+rt_collections = r.db(DBNAME).table_list().run(rt_conn)
+
 collections_in_mongo_not_rt = set.difference(getMongoCollections(db), set(rt_collections))
 
 for missing_collection in collections_in_mongo_not_rt:
@@ -71,8 +83,8 @@ for missing_collection in collections_in_mongo_not_rt:
 
 
 
-## The main loop
-cols = list(getMongoCollections(db))
+
+## the main loop
 
 ## # TODO, make rethink_mirrored a settable column name
 query = { "$or" :  [ {"rethink_mirrored" : {"$exists" : False}}, { "rethink_mirrored" : False}]}
@@ -89,6 +101,8 @@ while 1:
             print("--------------------------------------------------------------------------------")
             print(collection + "\t\t" + str(N_docs) + " unmirrored docs")
             for doc in cur_col.find(query):
+                print("DOC:")
+                print(str(doc))
                 rt_doc = transform_mongo_doc_to_rethink_doc(doc)
                 rt_doc['rethink_mirrored'] = True ## this becomes true on the next line
                 print(str(rt_doc))
